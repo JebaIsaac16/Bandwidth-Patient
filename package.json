@@ -1,0 +1,27 @@
+{
+  "name": "bandwidth-voice-poc",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node backend/server.js",
+    "dev": "nodemon backend/server.js",
+    "build": "webpack"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.20.0",
+    "bandwidth-rtc": "^0.8.0",
+    "bandwidth-sdk": "^8.2.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14",
+    "webpack": "^5.111.0",
+    "webpack-cli": "^7.2.3"
+  }
+}

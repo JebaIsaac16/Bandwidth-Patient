@@ -1,0 +1,968 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+        <title>Patient</title>
+
+        <link rel="icon" type="image/x-icon" href="./assets/images/logo.png" />
+
+        <!-- Bootstrap -->
+
+        <link
+            href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css"
+            rel="stylesheet"
+        />
+
+        <!-- Material Symbols -->
+
+        <link
+            rel="stylesheet"
+            href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined"
+        />
+
+        <style>
+            /* =========================================================
+           BODY
+        ========================================================= */
+
+            body {
+                background-color: #f5f7fa;
+
+                min-height: 100vh;
+            }
+
+            /* =========================================================
+           LOGIN SCREEN
+        ========================================================= */
+
+            #login_screen {
+                min-height: 100vh;
+
+                display: flex;
+
+                align-items: center;
+
+                justify-content: center;
+            }
+
+            .login-card {
+                width: 380px;
+
+                background: #ffffff;
+
+                border-radius: 16px;
+
+                padding: 40px;
+
+                box-shadow: 0 10px 35px rgba(0, 0, 0, 0.1);
+
+                text-align: center;
+            }
+
+            .login-logo {
+                max-width: 220px;
+
+                max-height: 100px;
+
+                object-fit: contain;
+
+                margin-bottom: 35px;
+            }
+
+            .login-title {
+                font-size: 22px;
+
+                font-weight: 600;
+
+                margin-bottom: 8px;
+            }
+
+            .login-subtitle {
+                color: #6c757d;
+
+                font-size: 14px;
+
+                margin-bottom: 30px;
+            }
+
+            .login-button {
+                width: 100%;
+
+                height: 46px;
+            }
+
+            /* =========================================================
+           APPLICATION
+        ========================================================= */
+
+            #app_screen {
+                display: none;
+            }
+
+            /* =========================================================
+           HEADER
+        ========================================================= */
+
+            .app-header {
+                height: 70px;
+
+                background-color: #ffffff;
+
+                border-bottom: 1px solid #dee2e6;
+            }
+
+            .header-logo {
+                max-height: 42px;
+
+                max-width: 150px;
+
+                object-fit: contain;
+            }
+
+            .patient-info {
+                display: flex;
+
+                align-items: center;
+
+                gap: 10px;
+            }
+
+            /* =========================================================
+           PATIENT HOME
+        ========================================================= */
+
+            .patient-container {
+                min-height: calc(100vh - 70px);
+
+                display: flex;
+
+                align-items: center;
+
+                justify-content: center;
+
+                padding: 30px 15px 50px;
+            }
+
+            .patient-call-card {
+                width: 100%;
+
+                max-width: 520px;
+
+                background-color: #ffffff;
+
+                border: 1px solid #e5e7eb;
+
+                border-radius: 18px;
+
+                padding: 45px 35px;
+
+                text-align: center;
+
+                box-shadow: 0 10px 35px rgba(0, 0, 0, 0.06);
+            }
+
+            .patient-avatar {
+                width: 90px;
+
+                height: 90px;
+
+                border-radius: 50%;
+
+                background-color: #e8f7f4;
+
+                color: #0a9f91;
+
+                margin: 0 auto 20px;
+
+                display: flex;
+
+                align-items: center;
+
+                justify-content: center;
+            }
+
+            .patient-avatar span {
+                font-size: 46px;
+            }
+
+            .patient-title {
+                font-size: 24px;
+
+                font-weight: 600;
+
+                color: #212529;
+
+                margin-bottom: 8px;
+            }
+
+            .patient-subtitle {
+                font-size: 14px;
+
+                color: #6c757d;
+
+                margin-bottom: 30px;
+            }
+
+            /* =========================================================
+           PHONE NUMBER
+        ========================================================= */
+
+            .phone-input-container {
+                max-width: 380px;
+
+                margin: 0 auto 20px;
+
+                text-align: left;
+            }
+
+            .phone-input-container label {
+                font-size: 14px;
+
+                color: #495057;
+            }
+
+            #phone_number {
+                height: 46px;
+            }
+
+            /* =========================================================
+           CALL BUTTON
+        ========================================================= */
+
+            .doctor-call-button {
+                width: 180px;
+
+                height: 50px;
+
+                border: none;
+
+                border-radius: 25px;
+
+                background-color: #198754;
+
+                color: #ffffff;
+
+                display: inline-flex;
+
+                align-items: center;
+
+                justify-content: center;
+
+                gap: 8px;
+
+                font-size: 15px;
+
+                font-weight: 500;
+
+                transition: 0.2s;
+            }
+
+            .doctor-call-button:hover {
+                background-color: #157347;
+
+                transform: translateY(-1px);
+            }
+
+            .doctor-call-button:disabled {
+                opacity: 0.65;
+
+                cursor: not-allowed;
+
+                transform: none;
+            }
+
+            .doctor-call-button span {
+                font-size: 21px;
+            }
+
+            /* =========================================================
+           CALL ERROR
+        ========================================================= */
+
+            #call_error {
+                max-width: 380px;
+
+                margin: 15px auto 0;
+            }
+
+            /* =========================================================
+           ACTIVE CALL WINDOW
+        ========================================================= */
+
+            #active_call_window {
+                position: fixed;
+
+                width: 370px;
+
+                right: 25px;
+
+                bottom: 25px;
+
+                background-color: #ffffff;
+
+                border: 1px solid #e5e7eb;
+
+                border-radius: 18px;
+
+                box-shadow: 0 15px 50px rgba(0, 0, 0, 0.22);
+
+                z-index: 9999;
+
+                display: none;
+
+                overflow: hidden;
+            }
+
+            /* =========================================================
+           CALL HEADER
+        ========================================================= */
+
+            .call-window-header {
+                background-color: #ffffff;
+
+                border-bottom: 1px solid #edf0f2;
+
+                padding: 13px 15px;
+
+                cursor: move;
+
+                display: flex;
+
+                align-items: center;
+
+                justify-content: space-between;
+            }
+
+            .call-type-icon {
+                width: 38px;
+
+                height: 38px;
+
+                border-radius: 50%;
+
+                background-color: #e8f7f4;
+
+                color: #0a9f91;
+
+                display: flex;
+
+                align-items: center;
+
+                justify-content: center;
+            }
+
+            .call-type-icon span {
+                font-size: 21px;
+            }
+
+            .call-window-title {
+                font-weight: 600;
+
+                font-size: 14px;
+
+                color: #212529;
+            }
+
+            .call-window-subtitle {
+                color: #8a9299;
+
+                font-size: 11px;
+
+                margin-top: 2px;
+            }
+
+            .call-window-actions {
+                display: flex;
+
+                gap: 3px;
+            }
+
+            .call-window-button {
+                width: 32px;
+
+                height: 32px;
+
+                border: none;
+
+                background-color: transparent;
+
+                border-radius: 8px;
+
+                display: flex;
+
+                align-items: center;
+
+                justify-content: center;
+            }
+
+            .call-window-button:hover {
+                background-color: #f1f3f5;
+            }
+
+            .call-window-button span {
+                font-size: 20px;
+            }
+
+            /* =========================================================
+           CALL BODY
+        ========================================================= */
+
+            .call-window-body {
+                padding: 28px 25px 24px;
+
+                text-align: center;
+            }
+
+            /* =========================================================
+           CALL AVATAR
+        ========================================================= */
+
+            .call-avatar {
+                width: 78px;
+
+                height: 78px;
+
+                border-radius: 50%;
+
+                background-color: #eef1f3;
+
+                margin: 0 auto 15px;
+
+                display: flex;
+
+                align-items: center;
+
+                justify-content: center;
+            }
+
+            .call-avatar span {
+                font-size: 40px;
+
+                color: #737b82;
+            }
+
+            /* =========================================================
+           CALL INFORMATION
+        ========================================================= */
+
+            .call-doctor-name {
+                font-weight: 600;
+
+                font-size: 19px;
+
+                color: #212529;
+            }
+
+            .call-doctor-label {
+                color: #7b858d;
+
+                font-size: 13px;
+
+                margin-top: 3px;
+            }
+
+            .call-status {
+                margin-top: 13px;
+
+                font-size: 14px;
+
+                color: #69737b;
+            }
+
+            .call-duration {
+                font-size: 13px;
+
+                color: #69737b;
+
+                margin-top: 5px;
+            }
+
+            /* =========================================================
+           RINGING INDICATOR
+        ========================================================= */
+
+            .call-ringing-indicator {
+                height: 18px;
+
+                margin-bottom: 8px;
+            }
+
+            .call-ringing-indicator span {
+                display: inline-block;
+
+                width: 6px;
+
+                height: 6px;
+
+                margin: 0 3px;
+
+                border-radius: 50%;
+
+                background-color: #0a9f91;
+
+                animation: call-ring-dot 1.2s infinite ease-in-out;
+            }
+
+            .call-ringing-indicator span:nth-child(2) {
+                animation-delay: 0.15s;
+            }
+
+            .call-ringing-indicator span:nth-child(3) {
+                animation-delay: 0.3s;
+            }
+
+            @keyframes call-ring-dot {
+                0%,
+                60%,
+                100% {
+                    transform: translateY(0);
+
+                    opacity: 0.4;
+                }
+
+                30% {
+                    transform: translateY(-5px);
+
+                    opacity: 1;
+                }
+            }
+
+            /* =========================================================
+           CALL CONTROLS
+        ========================================================= */
+
+            .call-controls {
+                margin-top: 25px;
+
+                display: flex;
+
+                justify-content: center;
+
+                gap: 14px;
+            }
+
+            .call-control {
+                width: 46px;
+
+                height: 46px;
+
+                border-radius: 50%;
+
+                border: none;
+
+                display: flex;
+
+                align-items: center;
+
+                justify-content: center;
+            }
+
+            .call-control span {
+                font-size: 22px;
+            }
+
+            .call-control-normal {
+                background-color: #e9ecef;
+
+                color: #212529;
+            }
+
+            .call-control-active {
+                background-color: #0d6efd;
+
+                color: #ffffff;
+            }
+
+            .call-control-end {
+                background-color: #dc3545;
+
+                color: #ffffff;
+            }
+
+            .call-control-end:hover {
+                background-color: #bb2d3b;
+            }
+
+            /* =========================================================
+           STATUS BADGES
+        ========================================================= */
+
+            .status-disconnected {
+                background-color: #dc3545 !important;
+            }
+
+            .status-connecting {
+                background-color: #ffc107 !important;
+
+                color: #212529 !important;
+            }
+
+            .status-connected {
+                background-color: #198754 !important;
+            }
+
+            /* =========================================================
+           MOBILE
+        ========================================================= */
+
+            @media (max-width: 576px) {
+                #active_call_window {
+                    width: calc(100% - 30px);
+
+                    right: 15px;
+
+                    bottom: 15px;
+                }
+
+                .patient-call-card {
+                    padding: 35px 25px;
+                }
+
+                .patient-title {
+                    font-size: 21px;
+                }
+
+                .patient-info {
+                    gap: 5px;
+                }
+
+                #logged_in_patient {
+                    display: none;
+                }
+            }
+        </style>
+    </head>
+
+    <body>
+        <!-- =========================================================
+         PATIENT LOGIN
+    ========================================================== -->
+
+        <section id="login_screen">
+            <div class="login-card">
+                <!-- LOGO -->
+
+                <img
+                    src="./assets/images/login-logo.png"
+                    alt="Humhealth Logo"
+                    class="login-logo"
+                />
+
+                <!-- TITLE -->
+
+                <div class="login-title">Patient Voice Calling</div>
+
+                <!-- SUBTITLE -->
+
+                <div class="login-subtitle">Connect to Humhealth Voice</div>
+
+                <!-- PATIENT -->
+
+                <div class="text-start mb-3">
+                    <label for="patient_id" class="form-label fw-semibold">
+                        Patient
+                    </label>
+
+                    <select id="patient_id" class="form-select">
+                        <option value="PT001">PT001 - Patient 001</option>
+
+                        <option value="PT002">PT002 - Patient 002</option>
+
+                        <option value="PT003">PT003 - Patient 003</option>
+                    </select>
+                </div>
+
+                <!-- LOGIN BUTTON -->
+
+                <button
+                    type="button"
+                    id="btn_login"
+                    class="btn btn-primary login-button"
+                >
+                    Login
+                </button>
+
+                <!-- LOGIN ERROR -->
+
+                <div
+                    id="login_error"
+                    class="text-danger small mt-3 d-none"
+                ></div>
+            </div>
+        </section>
+
+        <!-- =========================================================
+         PATIENT APPLICATION
+    ========================================================== -->
+
+        <section id="app_screen">
+            <!-- =====================================================
+             HEADER
+        ====================================================== -->
+
+            <header class="app-header">
+                <div class="container h-100">
+                    <div
+                        class="d-flex align-items-center justify-content-between h-100"
+                    >
+                        <!-- LOGO -->
+
+                        <div class="d-flex align-items-center gap-3">
+                            <img
+                                src="./assets/images/logo.png"
+                                alt="Humhealth Logo"
+                                class="header-logo"
+                            />
+
+                            <h4 class="mb-0">Humhealth Patient</h4>
+                        </div>
+
+                        <!-- PATIENT INFORMATION -->
+
+                        <div class="patient-info">
+                            <!-- BRTC STATUS -->
+
+                            <span
+                                id="patient_status"
+                                class="badge rounded-pill status-disconnected"
+                            >
+                                Disconnected
+                            </span>
+
+                            <!-- PATIENT -->
+
+                            <span class="fw-semibold" id="logged_in_patient">
+                                Patient
+                            </span>
+
+                            <!-- LOGOUT -->
+
+                            <button
+                                type="button"
+                                id="btn_logout"
+                                class="btn btn-outline-secondary btn-sm"
+                            >
+                                Logout
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <!-- =====================================================
+             PATIENT HOME
+        ====================================================== -->
+
+            <main class="container patient-container">
+                <div class="patient-call-card">
+                    <!-- PATIENT ICON -->
+
+                    <div class="patient-avatar">
+                        <span class="material-symbols-outlined"> person </span>
+                    </div>
+
+                    <!-- TITLE -->
+
+                    <div class="patient-title">Make an Outbound Call</div>
+
+                    <!-- SUBTITLE -->
+
+                    <div class="patient-subtitle">
+                        Enter a phone number and start a voice call.
+                    </div>
+
+                    <!-- =================================================
+                     PHONE NUMBER
+                ================================================== -->
+
+                    <div class="phone-input-container">
+                        <label
+                            for="phone_number"
+                            class="form-label fw-semibold"
+                        >
+                            Phone Number
+                        </label>
+
+                        <input
+                            type="tel"
+                            id="phone_number"
+                            class="form-control"
+                            placeholder="+15551234567"
+                            value="+19404060747"
+                            autocomplete="off"
+                        />
+                    </div>
+
+                    <!-- =================================================
+                     CALL ERROR
+                ================================================== -->
+
+                    <div id="call_error" class="text-danger small d-none"></div>
+
+                    <!-- =================================================
+                     CALL BUTTON
+                ================================================== -->
+
+                    <button
+                        type="button"
+                        id="btn_call_doctor"
+                        class="doctor-call-button"
+                    >
+                        <span class="material-symbols-outlined"> call </span>
+
+                        <span> Call </span>
+                    </button>
+                </div>
+            </main>
+        </section>
+
+        <!-- =========================================================
+         ACTIVE CALL WINDOW
+    ========================================================== -->
+
+        <div id="active_call_window">
+            <!-- =====================================================
+             CALL HEADER
+        ====================================================== -->
+
+            <div id="call_window_header" class="call-window-header">
+                <div class="d-flex align-items-center gap-2">
+                    <!-- CALL ICON -->
+
+                    <div id="call_type_icon" class="call-type-icon">
+                        <span class="material-symbols-outlined"> call </span>
+                    </div>
+
+                    <!-- CALL TITLE -->
+
+                    <div>
+                        <div id="call_window_title" class="call-window-title">
+                            Outbound Call
+                        </div>
+
+                        <div
+                            id="call_window_subtitle"
+                            class="call-window-subtitle"
+                        >
+                            Humhealth Voice
+                        </div>
+                    </div>
+                </div>
+
+                <!-- WINDOW ACTIONS -->
+
+                <div class="call-window-actions">
+                    <button
+                        type="button"
+                        id="btn_minimize_call"
+                        class="call-window-button"
+                        title="Minimize"
+                    >
+                        <span class="material-symbols-outlined"> remove </span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- =====================================================
+             CALL BODY
+        ====================================================== -->
+
+            <div id="call_window_body" class="call-window-body">
+                <!-- RINGING -->
+
+                <div
+                    id="call_ringing_indicator"
+                    class="call-ringing-indicator d-none"
+                >
+                    <span></span>
+
+                    <span></span>
+
+                    <span></span>
+                </div>
+
+                <!-- CALL AVATAR -->
+
+                <div class="call-avatar">
+                    <span
+                        id="call_avatar_icon"
+                        class="material-symbols-outlined"
+                    >
+                        call
+                    </span>
+                </div>
+
+                <!-- NUMBER -->
+
+                <div id="call_doctor_name" class="call-doctor-name">Number</div>
+
+                <!-- LABEL -->
+
+                <div id="call_doctor_label" class="call-doctor-label">
+                    Outbound Call
+                </div>
+
+                <!-- STATUS -->
+
+                <div id="call_status" class="call-status">Calling...</div>
+
+                <!-- DURATION -->
+
+                <div id="call_duration" class="call-duration">00:00</div>
+
+                <!-- =================================================
+                 ACTIVE CALL CONTROLS
+            ================================================== -->
+
+                <div id="active_call_controls" class="call-controls">
+                    <!-- MUTE -->
+
+                    <button
+                        type="button"
+                        id="btn_mute_call"
+                        class="call-control call-control-normal"
+                        title="Mute"
+                    >
+                        <span class="material-symbols-outlined"> mic </span>
+                    </button>
+
+                    <!-- END -->
+
+                    <button
+                        type="button"
+                        id="btn_end_call"
+                        class="call-control call-control-end"
+                        title="End Call"
+                    >
+                        <span class="material-symbols-outlined">
+                            call_end
+                        </span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- =========================================================
+         REMOTE AUDIO
+    ========================================================== -->
+
+        <audio id="remote_audio" autoplay playsinline></audio>
+
+        <!-- =========================================================
+         JAVASCRIPT
+    ========================================================== -->
+
+        <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+
+        <!-- BANDWIDTH BRTC BROWSER BUNDLE -->
+
+        <script src="/dist/bandwidth.bundle.js"></script>
+
+        <!-- PATIENT APPLICATION -->
+
+        <script src="/code.js"></script>
+    </body>
+</html>
