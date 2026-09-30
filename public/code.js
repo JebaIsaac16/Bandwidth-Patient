@@ -1,20 +1,29 @@
 /*
  * ========================================
- * COMMON CALL LOGIC (shared by inbound + outbound)
+ * PATIENT CALL LOGIC (copy of the working doctor flow)
  * ========================================
  *
  * Load order in index.html (IMPORTANT):
  *
  *   <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
  *   <script src="/dist/bandwidth.bundle.js"></script>
- *   <script src="/outbound.code.js"></script>
- *   <script src="/inbound.code.js"></script>
+ *   <script src="/outbound.code.js"></script>   (UNCHANGED)
+ *   <script src="/inbound.code.js"></script>    (UNCHANGED)
  *   <script src="/code.js"></script>
  *
- * code.js      → login, BRTC connection, SSE, call window, PiP,
- *                microphone, timer, mute, end call, cleanup, logout
- * outbound.code.js → patient list, calling a patient, outbound events
- * inbound.code.js  → incoming ringing, accept/decline, queue badge
+ * code.js          → login, BRTC connection, SSE, call window, PiP,
+ *                    microphone, timer, mute, DIAL PAD, end call, cleanup, logout
+ * outbound.code.js → doctor list, calling a doctor, outbound events
+ * inbound.code.js  → incoming ringing, accept/decline
+ *
+ * Changes vs the doctor project (only in this file):
+ *   - patient login
+ *   - no verification texts in the call window
+ *   - DIAL PAD (DTMF) in the call window
+ *
+ * NOTE: "doctor" names (doctorId, getDoctorSession, /api/doctor/...)
+ * are kept because the unchanged mixins use them. The logged-in
+ * user here is the PATIENT.
  */
 
 const bandwidthVoicePoc = function () {
@@ -58,22 +67,29 @@ const bandwidthVoicePoc = function () {
         declineIncomingCallButton: "#btn_decline_incoming_call",
         callRingingIndicator: "#call_ringing_indicator",
         inboundRingtone: "#inbound_ringtone",
+
+        // DIAL PAD
+        dialpadButton: "#btn_dialpad",
+        dialpadPanel: "#dialpad_panel",
+        dialpadDisplay: "#dialpad_display",
+        dialpadHint: "#dialpad_hint",
+        dialpadKey: ".dialpad-key",
     };
 
     /*
      * ----------------------------------------
-     * PATIENT DATA (used by outbound list + inbound caller names)
+     * DOCTOR LIST (fallback)
      * ----------------------------------------
      *
-     * Replaced after login by the server's patient directory
-     * (GET /api/patients) so names and phone numbers always match
-     * what the server verifies against. This list is only a fallback.
+     * Replaced after login by the server's list (GET /api/patients,
+     * which returns the doctors from BANDWIDTH_DOC_1_PHONE / _2_PHONE).
+     * The name "patients" is kept for the unchanged outbound.code.js.
      */
 
     this.patients = [
-        { id: "PT001", name: "Humworld Testing", phoneNumber: "+17346660002" },
-        { id: "PT002", name: "Bot testing", phoneNumber: "+18042221111" },
-        { id: "PT003", name: "Patient 003", phoneNumber: "+12013507115" },
+        { id: "DR001", name: "Doctor 1", phoneNumber: "+17346660002" },
+        { id: "DR002", name: "Doctor 2", phoneNumber: "+18042221111" },
+        { id: "DR003", name: "Doctor 3", phoneNumber: "+19404060747" },
     ];
 
     /*
@@ -82,8 +98,8 @@ const bandwidthVoicePoc = function () {
      * ----------------------------------------
      */
 
-    this.activePatient = null;
-    this.doctorId = null;
+    this.activePatient = null; // = the doctor being called
+    this.doctorId = null; // = the logged-in PATIENT id
     this.callTimer = null;
     this.callSeconds = 0;
     this.isMuted = false;
@@ -94,13 +110,18 @@ const bandwidthVoicePoc = function () {
     this.isDragging = false;
     this.dragOffsetX = 0;
     this.dragOffsetY = 0;
-    this.isCallEnding = false; // doctor pressed End
+    this.isCallEnding = false; // patient pressed End
     this.isRemoteEnding = false; // other side hung up
     this.isPageExiting = false;
     this.microphoneStream = null;
     this.publishedMicrophoneStream = null;
     this.cleanupTimer = null;
     this.doctorEventSource = null;
+
+    // DIAL PAD state
+    this.isRemoteConnected = false; // remote audio is flowing
+    this.isDialpadOpen = false;
+    this.dialpadDigits = "";
 
     /*
      * ----------------------------------------
@@ -119,6 +140,44 @@ const bandwidthVoicePoc = function () {
 
     window.bandwidthOutboundMixin.call(this);
     window.bandwidthInboundMixin.call(this);
+
+    /*
+     * ----------------------------------------
+     * NO VERIFICATION: override the verification texts
+     * (the mixin files themselves are not changed)
+     * ----------------------------------------
+     */
+
+    this.handleOutboundVerification = function (data) {
+        if (!this.isOutboundCallInProgress()) {
+            return;
+        }
+
+        if (
+            data.callId &&
+            this.activeOutboundCallId &&
+            data.callId !== this.activeOutboundCallId
+        ) {
+            return;
+        }
+
+        $(this.selectors.callStatus).text("Answered · connecting...");
+        $(this.selectors.callWindowSubtitle).text("Bandwidth Voice");
+    };
+
+    const originalShowIncomingCall = this.showIncomingCall;
+
+    this.showIncomingCall = function () {
+        originalShowIncomingCall.call(this);
+
+        $(this.selectors.callWindowSubtitle).text("Incoming call");
+
+        // No directory lookup → show the caller's number as the name.
+        if (this.incomingFrom) {
+            $(this.selectors.callPatientName).text(this.incomingFrom);
+            $(this.selectors.callPatientNumber).text("Incoming call");
+        }
+    };
 
     /*
      * ----------------------------------------
@@ -194,9 +253,6 @@ const bandwidthVoicePoc = function () {
 
             case "cancel":
                 return "Call cancelled";
-
-            case "verification-failed":
-                return "Verification failed";
 
             case "error":
             case "application-error":
@@ -292,9 +348,11 @@ const bandwidthVoicePoc = function () {
             console.log("BRTC endpoint is ready:", metadata);
         });
 
-        window.bandwidthRtc.onDtmfSent(function (event) {
-            console.log("DTMF sent:", event);
-        });
+        if (typeof window.bandwidthRtc.onDtmfSent === "function") {
+            window.bandwidthRtc.onDtmfSent(function (event) {
+                console.log("DTMF sent:", event);
+            });
+        }
     };
 
     /*
@@ -322,6 +380,11 @@ const bandwidthVoicePoc = function () {
 
         remoteAudio.srcObject = streamInfo.mediaStream;
 
+        // Call is connected → dial pad keys can be sent now.
+        this.isRemoteConnected = true;
+
+        $(this.selectors.dialpadHint).text("Press keys to answer the phone menu");
+
         try {
             await remoteAudio.play();
 
@@ -333,13 +396,13 @@ const bandwidthVoicePoc = function () {
 
     /*
      * ----------------------------------------
-     * DOCTOR SSE
+     * SSE (server events)
      * ----------------------------------------
      */
 
-    this.connectDoctorEvents = function (doctorId) {
-        if (!doctorId) {
-            console.warn("Doctor ID is required to connect to doctor events.");
+    this.connectDoctorEvents = function (userId) {
+        if (!userId) {
+            console.warn("Patient ID is required to connect to events.");
 
             return;
         }
@@ -348,34 +411,34 @@ const bandwidthVoicePoc = function () {
 
         const eventsUrl =
             `${this.backendUrl}/api/doctor/events?doctorId=` +
-            encodeURIComponent(doctorId);
+            encodeURIComponent(userId);
 
-        console.log("Connecting doctor SSE:", eventsUrl);
+        console.log("Connecting SSE:", eventsUrl);
 
         try {
             this.doctorEventSource = new EventSource(eventsUrl);
 
             this.doctorEventSource.onopen = function () {
-                console.log("Doctor SSE connection established.");
+                console.log("SSE connection established.");
             };
 
             this.doctorEventSource.onerror = function (error) {
-                console.error("Doctor SSE connection error:", error);
+                console.error("SSE connection error:", error);
             };
 
             this.doctorEventSource.onmessage = function (event) {
-                console.log("Doctor SSE message:", event.data);
+                console.log("SSE message:", event.data);
 
                 this.handleDoctorEventData(event.data);
             }.bind(this);
         } catch (error) {
-            console.error("Unable to create doctor SSE connection:", error);
+            console.error("Unable to create SSE connection:", error);
         }
     };
 
     this.disconnectDoctorEvents = function () {
         if (this.doctorEventSource) {
-            console.log("Closing doctor SSE connection.");
+            console.log("Closing SSE connection.");
 
             this.doctorEventSource.close();
 
@@ -391,10 +454,7 @@ const bandwidthVoicePoc = function () {
         const data = this.parseEventData(eventData);
 
         if (!data || !data.type) {
-            console.warn(
-                "Doctor SSE event does not contain a type:",
-                eventData,
-            );
+            console.warn("SSE event does not contain a type:", eventData);
 
             return;
         }
@@ -411,17 +471,17 @@ const bandwidthVoicePoc = function () {
             return;
         }
 
-        console.log("Unhandled doctor event type:", data.type);
+        console.log("Unhandled event type:", data.type);
     };
 
     /*
      * ----------------------------------------
-     * DOCTOR SESSION (localStorage)
+     * SESSION (localStorage)
      * ----------------------------------------
      */
 
     this.getDoctorSession = function () {
-        const sessionData = localStorage.getItem("doctorBrtcSession");
+        const sessionData = localStorage.getItem("patientBrtcSession");
 
         if (!sessionData) {
             return null;
@@ -430,9 +490,9 @@ const bandwidthVoicePoc = function () {
         try {
             return JSON.parse(sessionData);
         } catch (error) {
-            console.error("Invalid doctor session:", error);
+            console.error("Invalid patient session:", error);
 
-            localStorage.removeItem("doctorBrtcSession");
+            localStorage.removeItem("patientBrtcSession");
 
             return null;
         }
@@ -451,12 +511,12 @@ const bandwidthVoicePoc = function () {
         return new Date(sessionData.expirationTimestamp).getTime() > Date.now();
     };
 
-    this.createDoctorSession = function (doctorId) {
-        return this.postJson("/api/doctor/session", { doctorId: doctorId });
+    this.createDoctorSession = function (userId) {
+        return this.postJson("/api/doctor/session", { doctorId: userId });
     };
 
     this.saveDoctorSession = function (sessionData) {
-        localStorage.setItem("doctorBrtcSession", JSON.stringify(sessionData));
+        localStorage.setItem("patientBrtcSession", JSON.stringify(sessionData));
     };
 
     this.deleteDoctorEndpoint = async function (endpointId) {
@@ -489,21 +549,21 @@ const bandwidthVoicePoc = function () {
         const sessionData = this.getDoctorSession();
 
         if (!sessionData || !sessionData.endpointId) {
-            localStorage.removeItem("doctorBrtcSession");
+            localStorage.removeItem("patientBrtcSession");
 
             return;
         }
 
-        console.log("Deleting old doctor endpoint:", sessionData.endpointId);
+        console.log("Deleting old patient endpoint:", sessionData.endpointId);
 
         await this.deleteDoctorEndpoint(sessionData.endpointId);
 
-        localStorage.removeItem("doctorBrtcSession");
+        localStorage.removeItem("patientBrtcSession");
     };
 
     /*
      * ----------------------------------------
-     * LOGIN
+     * LOGIN (patient)
      * ----------------------------------------
      */
 
@@ -511,7 +571,7 @@ const bandwidthVoicePoc = function () {
         this.doctorId = $(this.selectors.doctorId).val();
 
         if (!this.doctorId) {
-            this.showLoginError("Please select a doctor.");
+            this.showLoginError("Please select a patient.");
 
             return;
         }
@@ -522,7 +582,7 @@ const bandwidthVoicePoc = function () {
             .prop("disabled", true)
             .text("Connecting...");
 
-        console.log("Starting doctor login.");
+        console.log("Starting patient login:", this.doctorId);
 
         this.deleteStoredDoctorEndpoint()
             .then(
@@ -535,7 +595,7 @@ const bandwidthVoicePoc = function () {
                     if (!response.success) {
                         throw new Error(
                             response.message ||
-                                "Unable to create doctor endpoint.",
+                                "Unable to create patient endpoint.",
                         );
                     }
 
@@ -548,14 +608,14 @@ const bandwidthVoicePoc = function () {
 
                     this.saveDoctorSession(sessionData);
 
-                    console.log("Doctor endpoint:", sessionData.endpointId);
+                    console.log("Patient endpoint:", sessionData.endpointId);
 
                     return this.connectDoctor(sessionData);
                 }.bind(this),
             )
             .catch(
                 function (error) {
-                    console.error("Doctor login failed:", error);
+                    console.error("Patient login failed:", error);
 
                     this.showLoginError(
                         error.responseJSON?.message ||
@@ -583,7 +643,7 @@ const bandwidthVoicePoc = function () {
 
             this.publishedMicrophoneStream = publishedStream;
 
-            console.log("Doctor microphone published:", publishedStream);
+            console.log("Patient microphone published:", publishedStream);
 
             this.showApplicationScreen();
 
@@ -623,22 +683,19 @@ const bandwidthVoicePoc = function () {
                 response.success &&
                 Array.isArray(response.patients)
             ) {
-                this.patients = response.patients.map(function (patient) {
+                this.patients = response.patients.map(function (doctor) {
                     return {
-                        id: patient.id,
-                        name: patient.name,
-                        phoneNumber: patient.phoneNumber || "",
+                        id: doctor.id,
+                        name: doctor.name,
+                        phoneNumber: doctor.phoneNumber || "",
                     };
                 });
 
-                console.log(
-                    "Patients loaded from server:",
-                    this.patients.length,
-                );
+                console.log("Doctors loaded from server:", this.patients.length);
             }
         } catch (error) {
             console.warn(
-                "Unable to load patients from server, using built-in list:",
+                "Unable to load doctors from server, using built-in list:",
                 error.status || error,
             );
         }
@@ -675,7 +732,7 @@ const bandwidthVoicePoc = function () {
 
     this.startMicrophone = async function () {
         if (this.publishedMicrophoneStream) {
-            console.log("Doctor microphone is already published.");
+            console.log("Patient microphone is already published.");
 
             return true;
         }
@@ -697,7 +754,7 @@ const bandwidthVoicePoc = function () {
             this.publishedMicrophoneStream =
                 await window.bandwidthRtc.publish(stream);
 
-            console.log("Doctor microphone published.");
+            console.log("Patient microphone published.");
 
             return true;
         } catch (error) {
@@ -716,7 +773,7 @@ const bandwidthVoicePoc = function () {
                     this.publishedMicrophoneStream,
                 );
 
-                console.log("Doctor microphone unpublished.");
+                console.log("Patient microphone unpublished.");
             } catch (error) {
                 console.error("Failed to unpublish microphone:", error);
             }
@@ -771,7 +828,96 @@ const bandwidthVoicePoc = function () {
 
     /*
      * ----------------------------------------
-     * END CALL (doctor pressed End)
+     * DIAL PAD (DTMF for phone menus / IVR)
+     * ----------------------------------------
+     */
+
+    this.toggleDialpad = function (forceOpen) {
+        if (!this.hasActiveCall()) {
+            return;
+        }
+
+        this.isDialpadOpen =
+            typeof forceOpen === "boolean" ? forceOpen : !this.isDialpadOpen;
+
+        $(this.selectors.dialpadPanel).toggleClass("d-none", !this.isDialpadOpen);
+
+        $(this.selectors.dialpadButton)
+            .toggleClass("call-control-active", this.isDialpadOpen)
+            .toggleClass("call-control-normal", !this.isDialpadOpen);
+
+        if (this.isDialpadOpen) {
+            // Keypad needs the full-size call window.
+            this.setCallWindowMinimized(false);
+
+            $(this.selectors.dialpadHint).text(
+                this.isRemoteConnected
+                    ? "Press keys to answer the phone menu"
+                    : "Keys work once the call is connected",
+            );
+        }
+    };
+
+    this.resetDialpad = function () {
+        this.isDialpadOpen = false;
+        this.dialpadDigits = "";
+
+        $(this.selectors.dialpadDisplay).text("");
+        $(this.selectors.dialpadHint).text("Press keys to answer the phone menu");
+        $(this.selectors.dialpadPanel).addClass("d-none");
+        $(this.selectors.dialpadButton)
+            .removeClass("call-control-active")
+            .addClass("call-control-normal");
+    };
+
+    this.sendDtmf = function (digit) {
+        digit = String(digit);
+
+        if (!/^[0-9*#]$/.test(digit)) {
+            return;
+        }
+
+        if (!this.hasActiveCall() || !this.isRemoteConnected) {
+            console.warn("DTMF not sent (call not connected yet):", digit);
+
+            $(this.selectors.dialpadHint).text("Keys work once the call is connected");
+
+            return;
+        }
+
+        if (
+            !window.bandwidthRtc ||
+            typeof window.bandwidthRtc.sendDtmf !== "function"
+        ) {
+            console.error("bandwidthRtc.sendDtmf is not available in this SDK.");
+
+            return;
+        }
+
+        try {
+            window.bandwidthRtc.sendDtmf(digit);
+
+            this.dialpadDigits += digit;
+
+            $(this.selectors.dialpadDisplay).text(this.dialpadDigits);
+
+            const $key = $(this.selectors.dialpadKey + '[data-digit="' + digit + '"]');
+
+            $key.addClass("is-pressed");
+
+            setTimeout(function () {
+                $key.removeClass("is-pressed");
+            }, 150);
+
+            console.log("DTMF sent:", digit);
+        } catch (error) {
+            console.error("Failed to send DTMF:", digit, error);
+        }
+    };
+
+    /*
+     * ----------------------------------------
+     * END CALL (patient pressed End)
      * ----------------------------------------
      */
 
@@ -815,11 +961,8 @@ const bandwidthVoicePoc = function () {
 
     /*
      * ----------------------------------------
-     * OTHER SIDE HUNG UP (patient, network, server)
+     * OTHER SIDE HUNG UP (doctor, network, server)
      * ----------------------------------------
-     *
-     * Shows the reason briefly, closes the connection,
-     * then removes the call UI (PiP window or in-tab panel).
      */
 
     this.handleRemoteHangup = async function (statusText) {
@@ -842,6 +985,7 @@ const bandwidthVoicePoc = function () {
         $(this.selectors.incomingCallControls).addClass("d-none");
         $(this.selectors.callRingingIndicator).addClass("d-none");
         $(this.selectors.activeCallControls).addClass("d-none");
+        $(this.selectors.dialpadPanel).addClass("d-none");
 
         if (wasOutbound) {
             await this.releaseOutboundConnection(patient);
@@ -930,14 +1074,16 @@ const bandwidthVoicePoc = function () {
         this.isSpeakerEnabled = false;
         this.isCallWindowMinimized = false;
         this.isRemoteEnding = false;
+        this.isRemoteConnected = false;
 
         this.resetCallControls();
+        this.resetDialpad();
 
         console.log("Call frontend state cleaned.");
 
         /*
-         * Tell the server the doctor is free,
-         * so the next queued patient can ring.
+         * Tell the server the patient is free,
+         * so the next queued caller can ring.
          */
 
         if (hadCall && this.doctorId && !this.isPageExiting) {
@@ -946,7 +1092,7 @@ const bandwidthVoicePoc = function () {
                 pstnCallId: endedPstnCallId,
             }).fail(function (xhr) {
                 console.warn(
-                    "Failed to report doctor idle:",
+                    "Failed to report idle:",
                     xhr.responseJSON || xhr.responseText || xhr.status,
                 );
             });
@@ -1017,7 +1163,13 @@ const bandwidthVoicePoc = function () {
      */
 
     this.minimizeCallWindow = function () {
-        this.setCallWindowMinimized(!this.isCallWindowMinimized);
+        const minimize = !this.isCallWindowMinimized;
+
+        if (minimize && this.isDialpadOpen) {
+            this.toggleDialpad(false);
+        }
+
+        this.setCallWindowMinimized(minimize);
     };
 
     this.setCallWindowMinimized = function (minimized) {
@@ -1077,7 +1229,7 @@ const bandwidthVoicePoc = function () {
             const pipWindow =
                 await window.documentPictureInPicture.requestWindow({
                     width: 360,
-                    height: 250,
+                    height: 560, // room for the dial pad
                     preferInitialWindowPlacement: true,
                 });
 
@@ -1130,6 +1282,18 @@ const bandwidthVoicePoc = function () {
 
             this.bindPictureInPictureControls();
 
+            // Keyboard digits while the PiP window has focus.
+            pipWindow.document.addEventListener(
+                "keydown",
+                function (event) {
+                    if (this.isDialpadOpen && /^[0-9*#]$/.test(event.key)) {
+                        event.preventDefault();
+
+                        this.sendDtmf(event.key);
+                    }
+                }.bind(this),
+            );
+
             $(callWindow).hide();
 
             pipWindow.addEventListener(
@@ -1169,7 +1333,7 @@ const bandwidthVoicePoc = function () {
     };
 
     /*
-     * PiP closed (by the doctor or by code).
+     * PiP closed (by the patient or by code).
      * Call still running → show in-tab panel. Call over → hide it.
      */
 
@@ -1250,6 +1414,20 @@ const bandwidthVoicePoc = function () {
         bind("btn_accept_incoming_call", this.acceptIncomingCall.bind(this));
         bind("btn_decline_incoming_call", this.declineIncomingCall.bind(this));
         bind("btn_minimize_call", this.minimizeCallWindow.bind(this));
+        bind(
+            "btn_dialpad",
+            function () {
+                this.toggleDialpad();
+            }.bind(this),
+        );
+
+        const self = this;
+
+        pipDocument.querySelectorAll(".dialpad-key").forEach(function (key) {
+            key.onclick = function () {
+                self.sendDtmf(key.getAttribute("data-digit"));
+            };
+        });
 
         const popoutButton = pipDocument.getElementById("btn_popout_call");
 
@@ -1283,7 +1461,7 @@ const bandwidthVoicePoc = function () {
 
         this.disconnectDoctorEvents();
 
-        const doctorSession = this.getDoctorSession();
+        const session = this.getDoctorSession();
 
         if (this.microphoneStream) {
             this.microphoneStream.getTracks().forEach(function (track) {
@@ -1297,11 +1475,11 @@ const bandwidthVoicePoc = function () {
          * End the active call on the server.
          */
 
-        if (doctorSession && this.hasActiveCall()) {
+        if (session && this.hasActiveCall()) {
             if (this.isInboundCallInProgress()) {
-                this.sendInboundExitBeacon(doctorSession);
+                this.sendInboundExitBeacon(session);
             } else {
-                this.sendOutboundExitBeacon(doctorSession);
+                this.sendOutboundExitBeacon(session);
             }
         }
 
@@ -1309,20 +1487,17 @@ const bandwidthVoicePoc = function () {
          * Delete BRTC endpoint.
          */
 
-        if (doctorSession && doctorSession.endpointId) {
+        if (session && session.endpointId) {
             const beaconSent = navigator.sendBeacon(
                 "/api/doctor/endpoint/cleanup",
-                new Blob(
-                    [JSON.stringify({ endpointId: doctorSession.endpointId })],
-                    {
-                        type: "application/json",
-                    },
-                ),
+                new Blob([JSON.stringify({ endpointId: session.endpointId })], {
+                    type: "application/json",
+                }),
             );
 
             console.log("BRTC endpoint cleanup beacon sent:", beaconSent);
 
-            localStorage.removeItem("doctorBrtcSession");
+            localStorage.removeItem("patientBrtcSession");
         }
 
         this.closeCallPictureInPicture();
@@ -1343,7 +1518,7 @@ const bandwidthVoicePoc = function () {
      */
 
     this.logoutDoctor = async function () {
-        console.log("Doctor logout started.");
+        console.log("Patient logout started.");
 
         this.disconnectDoctorEvents();
 
@@ -1365,13 +1540,13 @@ const bandwidthVoicePoc = function () {
             }
         }
 
-        const doctorSession = this.getDoctorSession();
+        const session = this.getDoctorSession();
 
-        if (doctorSession && doctorSession.endpointId) {
-            await this.deleteDoctorEndpoint(doctorSession.endpointId);
+        if (session && session.endpointId) {
+            await this.deleteDoctorEndpoint(session.endpointId);
         }
 
-        localStorage.removeItem("doctorBrtcSession");
+        localStorage.removeItem("patientBrtcSession");
 
         $(this.selectors.appScreen).hide();
         $(this.selectors.loginScreen).show();
@@ -1385,7 +1560,7 @@ const bandwidthVoicePoc = function () {
 
         this.isPageExiting = false;
 
-        console.log("Doctor logout completed.");
+        console.log("Patient logout completed.");
     };
 
     /*
@@ -1450,6 +1625,36 @@ const bandwidthVoicePoc = function () {
                 this.toggleSpeaker();
             }.bind(this),
         );
+
+        /*
+         * DIAL PAD
+         */
+
+        $(this.selectors.dialpadButton).on(
+            "click",
+            function () {
+                this.toggleDialpad();
+            }.bind(this),
+        );
+
+        const self = this;
+
+        $(document).on("click", this.selectors.dialpadKey, function () {
+            self.sendDtmf($(this).attr("data-digit"));
+        });
+
+        // Keyboard 0-9, *, # while the dial pad is open.
+        $(document).on("keydown", function (event) {
+            if (!self.isDialpadOpen || !self.hasActiveCall()) return;
+
+            if ($(event.target).is("input, textarea, select")) return;
+
+            if (/^[0-9*#]$/.test(event.key)) {
+                event.preventDefault();
+
+                self.sendDtmf(event.key);
+            }
+        });
 
         /*
          * Drag floating call window.

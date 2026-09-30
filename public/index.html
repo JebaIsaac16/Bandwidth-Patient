@@ -3,7 +3,7 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Bandwidth Voice POC</title>
+        <title>Patient Voice Calling</title>
         <link rel="icon" type="image/x-icon" href="./assets/images/logo.png" />
         <link
             href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css"
@@ -185,7 +185,8 @@
             }
             #active_call_window.is-pip .call-avatar,
             #active_call_window.is-pip .call-patient-number,
-            #active_call_window.is-pip .call-ringing-indicator {
+            #active_call_window.is-pip .call-ringing-indicator,
+            #active_call_window.is-pip .dialpad-panel {
                 display: none !important;
             }
             #active_call_window.is-pip .call-patient-name {
@@ -361,6 +362,66 @@
                 background-color: #dc3545;
                 color: #ffffff;
             }
+
+            /* ---------- DIAL PAD (DTMF) ---------- */
+
+            .dialpad-panel {
+                margin-top: 20px;
+                padding-top: 18px;
+                border-top: 1px solid #edf0f2;
+            }
+            .dialpad-display {
+                min-height: 26px;
+                font-size: 20px;
+                font-weight: 500;
+                letter-spacing: 4px;
+                color: #212529;
+                margin-bottom: 8px;
+                word-break: break-all;
+            }
+            .dialpad-hint {
+                font-size: 12px;
+                color: #8a9299;
+                margin-bottom: 12px;
+            }
+            .dialpad-grid {
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
+                gap: 10px;
+                max-width: 250px;
+                margin: 0 auto;
+            }
+            .dialpad-key {
+                height: 54px;
+                border: none;
+                border-radius: 12px;
+                background-color: #f1f3f5;
+                color: #212529;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                line-height: 1.1;
+                transition: 0.12s;
+            }
+            .dialpad-key:hover {
+                background-color: #e9ecef;
+            }
+            .dialpad-key:active,
+            .dialpad-key.is-pressed {
+                background-color: #dee2e6;
+                transform: scale(0.95);
+            }
+            .dialpad-key .digit {
+                font-size: 20px;
+                font-weight: 600;
+            }
+            .dialpad-key .letters {
+                font-size: 9px;
+                letter-spacing: 1.5px;
+                color: #8a9299;
+            }
+
             @media (max-width: 576px) {
                 #active_call_window {
                     width: calc(100% - 30px);
@@ -378,15 +439,17 @@
                     alt="Logo"
                     class="login-logo"
                 />
-                <div class="login-title">Doctor Voice Calling</div>
+                <div class="login-title">Patient Voice Calling</div>
                 <div class="login-subtitle">Connect to Bandwidth Voice</div>
                 <div class="text-start mb-3">
                     <label for="doctor_id" class="form-label fw-semibold"
-                        >Doctor</label
+                        >Patient</label
                     >
+                    <!-- id kept as "doctor_id" for the shared login code -->
                     <select id="doctor_id" class="form-select">
-                        <option value="D101">D101 - Doctor 101</option>
-                        <option value="D102">D102 - Doctor 102</option>
+                        <option value="PT001">PT001 - Patient 001</option>
+                        <option value="PT002">PT002 - Patient 002</option>
+                        <option value="PT003">PT003 - Patient 003</option>
                     </select>
                 </div>
                 <button
@@ -417,7 +480,7 @@
                                 alt="Logo"
                                 class="header-logo"
                             />
-                            <h4 class="mb-0">Humhealth Call POC</h4>
+                            <h4 class="mb-0">Humhealth Patient</h4>
                         </div>
                         <div class="doctor-info">
                             <span
@@ -426,7 +489,7 @@
                                 >Connected</span
                             >
                             <span class="fw-semibold" id="logged_in_doctor"
-                                >Doctor</span
+                                >Patient</span
                             >
                             <button
                                 type="button"
@@ -442,11 +505,12 @@
 
             <main class="container patients-container">
                 <div class="mb-4">
-                    <h4 class="mb-1">Patients</h4>
+                    <h4 class="mb-1">My Doctors</h4>
                     <p class="text-muted mb-0">
-                        Select a patient to start a PSTN call.
+                        Select a doctor to start a call.
                     </p>
                 </div>
+                <!-- id kept as "patient_list" for the shared outbound code -->
                 <div id="patient_list" class="row g-3"></div>
             </main>
         </section>
@@ -515,7 +579,7 @@
                 </div>
 
                 <div id="call_patient_name" class="call-patient-name">
-                    Patient
+                    Doctor
                 </div>
                 <div id="call_patient_number" class="call-patient-number">
                     x
@@ -566,6 +630,16 @@
                         <span class="material-symbols-outlined">mic</span>
                     </button>
 
+                    <!-- DIAL PAD BUTTON -->
+                    <button
+                        type="button"
+                        id="btn_dialpad"
+                        class="call-control call-control-normal"
+                        title="Dial pad"
+                    >
+                        <span class="material-symbols-outlined">dialpad</span>
+                    </button>
+
                     <button
                         type="button"
                         id="btn_speaker_call"
@@ -583,6 +657,28 @@
                     >
                         <span class="material-symbols-outlined">call_end</span>
                     </button>
+                </div>
+
+                <!-- DIAL PAD PANEL (DTMF for phone menus) -->
+                <div id="dialpad_panel" class="dialpad-panel d-none">
+                    <div id="dialpad_display" class="dialpad-display"></div>
+                    <div id="dialpad_hint" class="dialpad-hint">
+                        Press keys to answer the phone menu
+                    </div>
+                    <div class="dialpad-grid">
+                        <button type="button" class="dialpad-key" data-digit="1"><span class="digit">1</span><span class="letters">&nbsp;</span></button>
+                        <button type="button" class="dialpad-key" data-digit="2"><span class="digit">2</span><span class="letters">ABC</span></button>
+                        <button type="button" class="dialpad-key" data-digit="3"><span class="digit">3</span><span class="letters">DEF</span></button>
+                        <button type="button" class="dialpad-key" data-digit="4"><span class="digit">4</span><span class="letters">GHI</span></button>
+                        <button type="button" class="dialpad-key" data-digit="5"><span class="digit">5</span><span class="letters">JKL</span></button>
+                        <button type="button" class="dialpad-key" data-digit="6"><span class="digit">6</span><span class="letters">MNO</span></button>
+                        <button type="button" class="dialpad-key" data-digit="7"><span class="digit">7</span><span class="letters">PQRS</span></button>
+                        <button type="button" class="dialpad-key" data-digit="8"><span class="digit">8</span><span class="letters">TUV</span></button>
+                        <button type="button" class="dialpad-key" data-digit="9"><span class="digit">9</span><span class="letters">WXYZ</span></button>
+                        <button type="button" class="dialpad-key" data-digit="*"><span class="digit">*</span><span class="letters">&nbsp;</span></button>
+                        <button type="button" class="dialpad-key" data-digit="0"><span class="digit">0</span><span class="letters">+</span></button>
+                        <button type="button" class="dialpad-key" data-digit="#"><span class="digit">#</span><span class="letters">&nbsp;</span></button>
+                    </div>
                 </div>
             </div>
         </div>

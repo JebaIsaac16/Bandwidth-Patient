@@ -1,17 +1,28 @@
 /*
  * ========================================
- * COMMON BACKEND (shared by inbound + outbound)
+ * PATIENT BACKEND (copy of the working doctor flow)
  * ========================================
  *
  * server.js           → config, OAuth, Bandwidth API helpers, shared state,
- *                        doctor login / BRTC endpoints, SSE, doctor busy state,
+ *                        login / BRTC endpoints, SSE, busy state,
  *                        shared webhooks (endpoint events, disconnect)
- * outbound.server.js  → doctor calls patient
- * inbound.server.js   → patient calls doctor (assigned doctor + queue)
- * verification.server.js → shared caller verification (DOB + spoken name)
+ * outbound.server.js  → patient calls a doctor's phone number   (UNCHANGED)
+ * inbound.server.js   → someone calls the patient's number       (UNCHANGED)
+ *
+ * Changes vs the doctor project (only in this file):
+ *   - NO caller verification (verification.server.js is not used)
+ *   - caller ID = BANDWIDTH_VOICE_PATIENT_NUMBER
+ *   - call list = doctors from BANDWIDTH_DOC_1_PHONE / BANDWIDTH_DOC_2_PHONE
+ *   - incoming calls ring the logged-in patient
+ *
+ * NOTE: the logged-in user is still called "doctor" inside the code
+ * (doctorId, doctorEndpointMap, /api/doctor/...) because the unchanged
+ * inbound/outbound modules and browser mixins use those names.
+ * Here that user is the PATIENT.
  *
  * Bandwidth dashboard (Voice application):
- *   Call Initiated URL : {NGROK_URL}/api/callbacks/voice/initiate
+ *   Call Initiated URL : {NGROK_URL}/api/callbacks/voice/answer
+ *                        (or /api/callbacks/voice/initiate — both work)
  *   Call Status URL    : {NGROK_URL}/api/callbacks/voice/disconnect
  */
 
@@ -30,7 +41,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use(express.static(path.join(__dirname, "../public")));
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 4000;
 
 const ACCOUNT_ID = process.env.BANDWIDTH_ACCOUNT_ID;
 const CLIENT_ID = process.env.BANDWIDTH_CLIENT_ID;
@@ -67,12 +78,27 @@ const FALLBACK_CALLBACK_URL = `${NGROK_URL}/api/callbacks/bandwidth-fallback`;
 
 const VOICE_API_URL = "https://voice.bandwidth.com/api/v2";
 const VOICE_APPLICATION_ID = process.env.BANDWIDTH_VOICE_APPLICATION_ID;
-const VOICE_FACILITY_NUMBER = process.env.BANDWIDTH_VOICE_FACILITY_NUMBER;
-const VOICE_PATIENT_NUMBER = process.env.BANDWIDTH_VOICE_PATIENT_NUMBER;
 
-if (!VOICE_APPLICATION_ID || !VOICE_FACILITY_NUMBER || !VOICE_PATIENT_NUMBER) {
+/*
+ * Caller ID for outbound calls = the patient's Bandwidth number.
+ * (outbound.server.js reads it as VOICE_FACILITY_NUMBER.)
+ */
+
+const VOICE_CALLER_NUMBER = String(
+    process.env.BANDWIDTH_VOICE_PATIENT_NUMBER ||
+        process.env.BANDWIDTH_VOICE_FACILITY_NUMBER ||
+        "",
+).trim();
+
+if (!VOICE_APPLICATION_ID || !VOICE_CALLER_NUMBER) {
     throw new Error(
-        "Missing Bandwidth Voice Application configuration in .env",
+        "Missing BANDWIDTH_VOICE_APPLICATION_ID or BANDWIDTH_VOICE_PATIENT_NUMBER in .env",
+    );
+}
+
+if (!/^\+[1-9]\d{6,14}$/.test(VOICE_CALLER_NUMBER)) {
+    throw new Error(
+        `BANDWIDTH_VOICE_PATIENT_NUMBER "${VOICE_CALLER_NUMBER}" is not E.164 (e.g. +12013507115).`,
     );
 }
 
@@ -89,11 +115,11 @@ const SSE_HEARTBEAT_MS = 25000;
  * ---------------------------------------- */
 
 const brtcEndpointStatus = new Map(); // endpointId → { eligible, token, ... }
-const doctorEndpointMap = new Map(); // doctorId → endpointId
-const doctorEventClients = new Map(); // doctorId → Set(res)
+const doctorEndpointMap = new Map(); // userId (patient) → endpointId
+const doctorEventClients = new Map(); // userId (patient) → Set(res)
 
 /*
- * doctorId → { busyReason, activeCallId }
+ * userId → { busyReason, activeCallId }
  *
  * busyReason: null | "outbound" | "inbound" | "browser"
  * activeCallId: connected inbound PSTN call id
@@ -102,73 +128,55 @@ const doctorEventClients = new Map(); // doctorId → Set(res)
 const doctorCallState = new Map();
 
 /* ----------------------------------------
- * PATIENT DIRECTORY
+ * DOCTORS THE PATIENT CAN CALL
  *
- * Used for:
- * - caller verification (DOB + first name + last name)
- * - patient → assigned doctor
- * - patient list in the browser (GET /api/patients, no DOB sent)
- *
- * EDIT these to your real test patients:
- *   dob          → "YYYY-MM-DD"
- *   phoneNumber  → E.164, must match the number the doctor dials
- *                  and the number the patient calls from
+ * Shown in the browser list (GET /api/patients returns this list,
+ * because the unchanged outbound.code.js loads from that route).
  * ---------------------------------------- */
 
-const patients = [
+const doctors = [
     {
-        id: "PT001",
-        firstName: "Praveen",
-        lastName: "Kumar",
-        dob: "2004-01-01",
-        phoneNumber:
-            process.env.BANDWIDTH_PATIENT_1_PHONE || VOICE_PATIENT_NUMBER,
-        doctorId: "D101",
+        id: "DR001",
+        name: process.env.BANDWIDTH_DOC_1_NAME || "Doctor 1",
+        phoneNumber: String(process.env.BANDWIDTH_DOC_1_PHONE || "").trim(),
     },
     {
-        id: "PT002",
-        firstName: "Bot",
-        lastName: "Testing",
-        dob: "1950-01-01",
-        phoneNumber: process.env.BANDWIDTH_PATIENT_2_PHONE || "",
-        doctorId: "D102",
+        id: "DR002",
+        name: process.env.BANDWIDTH_DOC_2_NAME || "Doctor 2",
+        phoneNumber: String(process.env.BANDWIDTH_DOC_2_PHONE || "").trim(),
     },
     {
-        id: "PT003",
-        firstName: "Patient",
-        lastName: "Three",
-        dob: "1948-12-25",
-        phoneNumber: process.env.BANDWIDTH_PATIENT_3_PHONE || "",
-        doctorId: "D101",
+        id: "DR003",
+        name: process.env.BANDWIDTH_DOC_3_NAME || "Doctor 3",
+        phoneNumber: String(process.env.BANDWIDTH_DOC_3_PHONE || "").trim(),
     },
-];
+].filter(function (doctor) {
+    return doctor.phoneNumber;
+});
 
-const patientDoctorMap = new Map(
-    patients.map(function (patient) {
-        return [patient.id, patient.doctorId];
-    }),
-);
+/*
+ * No verification → no patient directory.
+ *
+ * inbound.server.js uses patientDoctorMap to find WHO to ring.
+ * The no-verification module (below) fills it in for every
+ * incoming call with the logged-in patient.
+ */
 
-const patientPhoneMap = new Map(
-    patients
-        .filter(function (patient) {
-            return patient.phoneNumber;
-        })
-        .map(function (patient) {
-            return [patient.phoneNumber, patient.id];
-        }),
-);
+const patients = [];
 
-function getPatientById(patientId) {
-    return (
-        patients.find(function (patient) {
-            return patient.id === patientId;
-        }) || null
-    );
+const patientDoctorMap = new Map();
+
+function getPatientById() {
+    return null;
 }
 
-function findPatientByPhone(phoneNumber) {
-    return getPatientById(patientPhoneMap.get(phoneNumber)) || null;
+// null → outbound.server.js connects the answered call directly (no DOB).
+function findPatientByPhone() {
+    return null;
+}
+
+function getPatientIdFromPhone() {
+    return null;
 }
 
 /* ----------------------------------------
@@ -203,10 +211,6 @@ function sendBxml(res, verbs) {
     );
 }
 
-function getPatientIdFromPhone(phoneNumber) {
-    return patientPhoneMap.get(phoneNumber) || null;
-}
-
 /* ----------------------------------------
  * OAUTH ACCESS TOKEN
  * ---------------------------------------- */
@@ -233,8 +237,8 @@ async function getAccessToken() {
  * BRTC ENDPOINTS
  * ---------------------------------------- */
 
-async function createDoctorEndpoint() {
-    console.log("Creating new doctor BRTC endpoint");
+async function createDoctorEndpoint(userId) {
+    console.log("Creating new patient BRTC endpoint:", userId);
 
     const accessToken = await getAccessToken();
 
@@ -247,7 +251,8 @@ async function createDoctorEndpoint() {
             eventFallbackUrl: FALLBACK_CALLBACK_URL,
             tag: JSON.stringify({
                 environment: "poc",
-                role: "doctor",
+                role: "patient",
+                patientId: userId,
             }),
         },
         {
@@ -265,21 +270,21 @@ async function createDoctorEndpoint() {
 }
 
 function findDoctorByEndpoint(endpointId) {
-    for (const [doctorId, mappedEndpointId] of doctorEndpointMap.entries()) {
-        if (mappedEndpointId === endpointId) return doctorId;
+    for (const [userId, mappedEndpointId] of doctorEndpointMap.entries()) {
+        if (mappedEndpointId === endpointId) return userId;
     }
 
     return null;
 }
 
 function removeDoctorEndpointMapping(endpointId) {
-    for (const [doctorId, mappedEndpointId] of doctorEndpointMap.entries()) {
+    for (const [userId, mappedEndpointId] of doctorEndpointMap.entries()) {
         if (mappedEndpointId === endpointId) {
-            doctorEndpointMap.delete(doctorId);
+            doctorEndpointMap.delete(userId);
 
             console.log(
-                "Doctor endpoint mapping removed:",
-                doctorId,
+                "Patient endpoint mapping removed:",
+                userId,
                 "→",
                 endpointId,
             );
@@ -408,37 +413,37 @@ async function redirectVoiceCall(callId, redirectUrl) {
 }
 
 /* ----------------------------------------
- * DOCTOR ONLINE / BUSY STATE
+ * ONLINE / BUSY STATE (of the logged-in patient)
  * ---------------------------------------- */
 
-function isDoctorOnline(doctorId) {
-    const endpointId = doctorEndpointMap.get(doctorId);
+function isDoctorOnline(userId) {
+    const endpointId = doctorEndpointMap.get(userId);
     if (!endpointId) return false;
 
     const status = brtcEndpointStatus.get(endpointId);
     if (!status || status.eligible !== true) return false;
 
-    const clients = doctorEventClients.get(doctorId);
+    const clients = doctorEventClients.get(userId);
     return Boolean(clients && clients.size);
 }
 
-function getDoctorCallState(doctorId) {
-    if (!doctorCallState.has(doctorId)) {
-        doctorCallState.set(doctorId, { busyReason: null, activeCallId: null });
+function getDoctorCallState(userId) {
+    if (!doctorCallState.has(userId)) {
+        doctorCallState.set(userId, { busyReason: null, activeCallId: null });
     }
 
-    return doctorCallState.get(doctorId);
+    return doctorCallState.get(userId);
 }
 
-function setDoctorBusy(doctorId, reason, callId) {
-    const state = getDoctorCallState(doctorId);
+function setDoctorBusy(userId, reason, callId) {
+    const state = getDoctorCallState(userId);
 
     state.busyReason = reason;
     state.activeCallId = callId || null;
 
     console.log(
-        "Doctor busy:",
-        doctorId,
+        "Patient busy:",
+        userId,
         "| reason:",
         reason,
         "| call:",
@@ -447,44 +452,44 @@ function setDoctorBusy(doctorId, reason, callId) {
 }
 
 /*
- * Doctor is free → after a short delay, ring the next queued patient.
+ * Free → after a short delay, ring the next queued caller.
  */
 
-function markDoctorFree(doctorId, delayMs) {
-    const state = getDoctorCallState(doctorId);
+function markDoctorFree(userId, delayMs) {
+    const state = getDoctorCallState(userId);
 
     state.busyReason = null;
     state.activeCallId = null;
 
-    console.log("Doctor free:", doctorId);
+    console.log("Patient free:", userId);
 
     setTimeout(function () {
-        if (inboundModule) inboundModule.dispatchNext(doctorId);
+        if (inboundModule) inboundModule.dispatchNext(userId);
     }, delayMs || 0);
 }
 
 /* ----------------------------------------
- * SEND SSE EVENT TO DOCTOR
+ * SEND SSE EVENT TO THE BROWSER
  * ---------------------------------------- */
 
-function sendDoctorEvent(doctorId, event) {
-    const clients = doctorEventClients.get(doctorId);
+function sendDoctorEvent(userId, event) {
+    const clients = doctorEventClients.get(userId);
 
     if (!clients || !clients.size) {
-        console.log("No SSE client connected for doctor:", doctorId);
+        console.log("No SSE client connected for:", userId);
 
         return false;
     }
 
     const message = `data: ${JSON.stringify(event)}\n\n`;
 
-    console.log(`Doctor SSE → ${doctorId}:`, JSON.stringify(event));
+    console.log(`SSE → ${userId}:`, JSON.stringify(event));
 
     for (const client of clients) {
         try {
             client.write(message);
         } catch (error) {
-            console.error("Failed to send doctor SSE event:", error.message);
+            console.error("Failed to send SSE event:", error.message);
 
             clients.delete(client);
         }
@@ -494,7 +499,132 @@ function sendDoctorEvent(doctorId, event) {
 }
 
 /* ----------------------------------------
- * LOAD OUTBOUND + INBOUND MODULES
+ * NO VERIFICATION
+ *
+ * Replaces verification.server.js with the same interface
+ * (start / registerPurpose / handleDisconnect), so the unchanged
+ * inbound.server.js and outbound.server.js keep working.
+ *
+ * start() skips DOB / name and goes straight to "verified".
+ * ---------------------------------------- */
+
+const INCOMING_CALLER_KEY = "INCOMING_CALLER";
+
+// Optional: always ring this user for incoming calls (e.g. PT001).
+const INCOMING_USER_ID = process.env.INCOMING_USER_ID || null;
+
+function pickUserToRing() {
+    if (INCOMING_USER_ID) return INCOMING_USER_ID;
+
+    for (const userId of doctorEndpointMap.keys()) {
+        if (isDoctorOnline(userId)) return userId;
+    }
+
+    // Nobody online → first logged-in user (inbound.server.js then says "unavailable").
+    const first = doctorEndpointMap.keys().next();
+
+    return first.done ? null : first.value;
+}
+
+function createNoVerification() {
+    const purposes = {};
+
+    return {
+        registerPurpose: function (purpose, handlers) {
+            purposes[purpose] = handlers;
+        },
+
+        start: function (callId, options) {
+            const handlers = purposes[options.purpose];
+
+            if (!handlers) {
+                console.error("No handler for purpose:", options.purpose);
+
+                return "<Hangup/>";
+            }
+
+            if (options.purpose === "inbound") {
+                const userId = pickUserToRing();
+
+                if (userId) {
+                    patientDoctorMap.set(INCOMING_CALLER_KEY, userId);
+                } else {
+                    patientDoctorMap.delete(INCOMING_CALLER_KEY);
+                }
+
+                console.log("No verification (inbound) → ringing:", userId || "NOBODY");
+            } else {
+                console.log("No verification (" + options.purpose + "):", callId);
+            }
+
+            return handlers.onVerified(
+                {
+                    callId: callId,
+                    purpose: options.purpose,
+                    from: options.from || null,
+                    to: options.to || null,
+                    data: options.data || {},
+                },
+                {
+                    verified: true,
+                    method: "none",
+                    patientId: options.expectedPatientId || INCOMING_CALLER_KEY,
+                    heardFirstName: "",
+                    heardLastName: "",
+                },
+            );
+        },
+
+        handleDisconnect: function () {
+            return false;
+        },
+    };
+}
+
+/* ----------------------------------------
+ * INCOMING CALLS SENT TO /voice/answer
+ *
+ * The dashboard "Call initiated" URL is /api/callbacks/voice/answer,
+ * but in this code incoming calls are handled by /voice/initiate
+ * (/voice/answer is the OUTBOUND answer route in outbound.server.js).
+ *
+ * Bandwidth marks incoming calls with eventType "initiate", so they
+ * are forwarded to /voice/initiate here. Must be registered BEFORE
+ * the modules below.
+ * ---------------------------------------- */
+
+app.post("/api/callbacks/voice/answer", function (req, res, next) {
+    const event = req.body || {};
+
+    if (event.eventType !== "initiate") {
+        return next(); // outbound "answer" → outbound.server.js
+    }
+
+    // Ignore calls for another account / Voice Application.
+    if (
+        (event.accountId && String(event.accountId) !== String(ACCOUNT_ID)) ||
+        (event.applicationId && event.applicationId !== VOICE_APPLICATION_ID)
+    ) {
+        console.warn(
+            "Ignoring incoming call from another account/application:",
+            event.accountId,
+            event.applicationId,
+            "| to:",
+            event.to,
+        );
+
+        return sendBxml(res, "<Hangup/>");
+    }
+
+    console.log("Incoming call on /voice/answer → forwarding to /voice/initiate");
+
+    req.url = "/api/callbacks/voice/initiate";
+
+    next();
+});
+
+/* ----------------------------------------
+ * LOAD OUTBOUND + INBOUND MODULES (UNCHANGED FILES)
  * ---------------------------------------- */
 
 const ctx = {
@@ -503,7 +633,7 @@ const ctx = {
         ACCOUNT_ID,
         VOICE_API_URL,
         VOICE_APPLICATION_ID,
-        VOICE_FACILITY_NUMBER,
+        VOICE_FACILITY_NUMBER: VOICE_CALLER_NUMBER, // caller ID for outbound calls
         AFTER_CALL_DISPATCH_DELAY_MS,
         DISCONNECT_DISPATCH_DELAY_MS,
     },
@@ -530,8 +660,8 @@ const ctx = {
     sendBxml,
 };
 
-// Shared caller verification (DOB + name), used by both directions.
-const verificationModule = require("./verification.server")(app, ctx);
+// No DOB / name verification in the patient flow.
+const verificationModule = createNoVerification();
 ctx.verification = verificationModule;
 
 const outboundModule = require("./outbound.server")(app, ctx);
@@ -544,23 +674,23 @@ const inboundModule = require("./inbound.server")(app, ctx);
 app.get("/health", (req, res) => {
     res.json({
         success: true,
-        message: "Bandwidth Voice POC backend is running",
+        message: "Patient Voice backend is running",
     });
 });
 
 /* ----------------------------------------
- * PATIENT LIST FOR THE BROWSER (no DOB)
+ * CALL LIST FOR THE BROWSER = DOCTORS
+ * (route name kept for the unchanged outbound.code.js)
  * ---------------------------------------- */
 
 app.get("/api/patients", (req, res) => {
     res.json({
         success: true,
-        patients: patients.map(function (patient) {
+        patients: doctors.map(function (doctor) {
             return {
-                id: patient.id,
-                name: `${patient.firstName} ${patient.lastName}`,
-                phoneNumber: patient.phoneNumber,
-                doctorId: patient.doctorId,
+                id: doctor.id,
+                name: doctor.name,
+                phoneNumber: doctor.phoneNumber,
             };
         }),
     });
@@ -590,36 +720,36 @@ app.get("/api/test-auth", async (req, res) => {
 });
 
 /* ----------------------------------------
- * CREATE DOCTOR SESSION
+ * CREATE SESSION (patient login)
  * ---------------------------------------- */
 
 app.post("/api/doctor/session", async (req, res) => {
-    const doctorId = req.body?.doctorId;
+    const userId = req.body?.doctorId;
 
-    if (!doctorId) {
+    if (!userId) {
         return res.status(400).json({
             success: false,
-            message: "doctorId is required",
+            message: "patient id is required",
         });
     }
 
-    console.log("Starting doctor session:", doctorId);
+    console.log("Starting patient session:", userId);
 
     try {
-        const oldEndpointId = doctorEndpointMap.get(doctorId);
+        const oldEndpointId = doctorEndpointMap.get(userId);
 
         if (oldEndpointId) {
             const oldStatus = brtcEndpointStatus.get(oldEndpointId);
 
             if (oldStatus?.eligible === true) {
                 console.log(
-                    "Doctor already has an active eligible endpoint:",
+                    "Patient already has an active eligible endpoint:",
                     oldEndpointId,
                 );
 
                 return res.json({
                     success: true,
-                    doctorId: doctorId,
+                    doctorId: userId,
                     endpointId: oldEndpointId,
                     token: oldStatus.token || null,
                     expirationTimestamp: oldStatus.expirationTimestamp || null,
@@ -627,10 +757,10 @@ app.post("/api/doctor/session", async (req, res) => {
                 });
             }
 
-            doctorEndpointMap.delete(doctorId);
+            doctorEndpointMap.delete(userId);
         }
 
-        const endpoint = await createDoctorEndpoint();
+        const endpoint = await createDoctorEndpoint(userId);
 
         brtcEndpointStatus.set(endpoint.endpointId, {
             eligible: false,
@@ -640,23 +770,18 @@ app.post("/api/doctor/session", async (req, res) => {
             expirationTimestamp: endpoint.expirationTimestamp,
         });
 
-        doctorEndpointMap.set(doctorId, endpoint.endpointId);
+        doctorEndpointMap.set(userId, endpoint.endpointId);
 
-        // Fresh login → the doctor is not on any call.
-        const state = getDoctorCallState(doctorId);
+        // Fresh login → not on any call.
+        const state = getDoctorCallState(userId);
         state.busyReason = null;
         state.activeCallId = null;
 
-        console.log(
-            "Doctor endpoint mapping:",
-            doctorId,
-            "→",
-            endpoint.endpointId,
-        );
+        console.log("Patient endpoint mapping:", userId, "→", endpoint.endpointId);
 
         res.json({
             success: true,
-            doctorId: doctorId,
+            doctorId: userId,
             endpointId: endpoint.endpointId,
             token: endpoint.token,
             expirationTimestamp: endpoint.expirationTimestamp,
@@ -670,27 +795,27 @@ app.post("/api/doctor/session", async (req, res) => {
 
         res.status(error.response?.status || 500).json({
             success: false,
-            message: "Failed to create doctor BRTC session",
+            message: "Failed to create patient BRTC session",
             error: error.response?.data || error.message,
         });
     }
 });
 
 /* ----------------------------------------
- * ACTIVE DOCTORS (debugging)
+ * ACTIVE USERS (debugging)
  * ---------------------------------------- */
 
 app.get("/api/doctors", (req, res) => {
-    const doctors = Array.from(doctorEndpointMap.entries()).map(
-        ([doctorId, endpointId]) => {
+    const users = Array.from(doctorEndpointMap.entries()).map(
+        ([userId, endpointId]) => {
             const status = brtcEndpointStatus.get(endpointId);
-            const callState = getDoctorCallState(doctorId);
+            const callState = getDoctorCallState(userId);
 
             return {
-                doctorId: doctorId,
+                userId: userId,
                 endpointId: endpointId,
                 eligible: status?.eligible === true,
-                online: isDoctorOnline(doctorId),
+                online: isDoctorOnline(userId),
                 busyReason: callState.busyReason,
                 activeCallId: callState.activeCallId,
                 deviceId: status?.deviceId || null,
@@ -700,17 +825,17 @@ app.get("/api/doctors", (req, res) => {
         },
     );
 
-    res.json({ success: true, doctors: doctors });
+    res.json({ success: true, users: users });
 });
 
 /* ----------------------------------------
- * DELETE DOCTOR BRTC ENDPOINT
+ * DELETE BRTC ENDPOINT
  * ---------------------------------------- */
 
 app.delete("/api/doctor/endpoint/:endpointId", async (req, res) => {
     const endpointId = req.params.endpointId;
 
-    console.log("Delete doctor BRTC endpoint:", endpointId);
+    console.log("Delete patient BRTC endpoint:", endpointId);
 
     try {
         res.json(await deleteDoctorEndpoint(endpointId));
@@ -787,34 +912,29 @@ app.get("/api/doctor/endpoint-status", (req, res) => {
 });
 
 /* ----------------------------------------
- * DOCTOR IDLE (browser finished any call)
+ * IDLE (browser finished any call)
  * ---------------------------------------- */
 
 app.post("/api/doctor/idle", async (req, res) => {
-    const doctorId = req.body?.doctorId;
+    const userId = req.body?.doctorId;
     const pstnCallId = req.body?.pstnCallId || null;
 
-    if (!doctorId) {
+    if (!userId) {
         return res.status(400).json({
             success: false,
-            message: "doctorId is required",
+            message: "patient id is required",
         });
     }
 
-    const state = getDoctorCallState(doctorId);
+    const state = getDoctorCallState(userId);
 
     /*
-     * Server thinks the doctor is on a DIFFERENT inbound call
+     * Server thinks the patient is on a DIFFERENT inbound call
      * → this is a late message from an older call. Ignore it.
      */
 
     if (state.activeCallId && state.activeCallId !== pstnCallId) {
-        console.log(
-            "Stale idle ignored:",
-            doctorId,
-            "| active:",
-            state.activeCallId,
-        );
+        console.log("Stale idle ignored:", userId, "| active:", state.activeCallId);
 
         return res.json({ success: true, ignored: true });
     }
@@ -824,7 +944,7 @@ app.post("/api/doctor/idle", async (req, res) => {
         await inboundModule.endActiveCall(state.activeCallId);
     }
 
-    markDoctorFree(doctorId, AFTER_CALL_DISPATCH_DELAY_MS);
+    markDoctorFree(userId, AFTER_CALL_DISPATCH_DELAY_MS);
 
     res.json({ success: true });
 });
@@ -867,12 +987,12 @@ app.post("/api/callbacks/bandwidth", async (req, res) => {
 
         console.log("BRTC endpoint is ELIGIBLE:", event.endpointId);
 
-        // Patients may be waiting for this doctor.
-        const doctorId = findDoctorByEndpoint(event.endpointId);
+        // Callers may be waiting for this patient.
+        const userId = findDoctorByEndpoint(event.endpointId);
 
-        if (doctorId) {
+        if (userId) {
             setTimeout(function () {
-                inboundModule.dispatchNext(doctorId);
+                inboundModule.dispatchNext(userId);
             }, 1000);
         }
 
@@ -892,12 +1012,12 @@ app.post("/api/callbacks/bandwidth", async (req, res) => {
         });
 
         /*
-         * Mapping is kept on purpose: the endpoint can become
-         * eligible again. It is removed when the endpoint is deleted.
+         * Mapping is kept on purpose: the endpoint becomes eligible
+         * again after a call. It is removed when the endpoint is deleted.
          */
 
         console.log("BRTC endpoint is INELIGIBLE:", event.endpointId);
-        console.log("Reason:", event.errorMessage || "Unknown");
+        console.log("Reason:", event.errorMessage || "busy (in a call)");
 
         return res.sendStatus(200);
     }
@@ -937,7 +1057,6 @@ app.post("/api/callbacks/voice/disconnect", (req, res) => {
     const event = req.body || {};
 
     try {
-        // Caller may hang up during verification (before inbound/outbound routing).
         const wasVerifying = verificationModule.handleDisconnect(event);
 
         const handled =
@@ -956,20 +1075,20 @@ app.post("/api/callbacks/voice/disconnect", (req, res) => {
 });
 
 /* ----------------------------------------
- * DOCTOR SSE
+ * SSE (browser events)
  * ---------------------------------------- */
 
 app.get("/api/doctor/events", (req, res) => {
-    const doctorId = req.query.doctorId;
+    const userId = req.query.doctorId;
 
-    if (!doctorId) {
+    if (!userId) {
         return res.status(400).json({
             success: false,
-            message: "doctorId is required",
+            message: "patient id is required",
         });
     }
 
-    console.log("Doctor SSE connected:", doctorId);
+    console.log("SSE connected:", userId);
 
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
@@ -979,20 +1098,20 @@ app.get("/api/doctor/events", (req, res) => {
         res.flushHeaders();
     }
 
-    if (!doctorEventClients.has(doctorId)) {
-        doctorEventClients.set(doctorId, new Set());
+    if (!doctorEventClients.has(userId)) {
+        doctorEventClients.set(userId, new Set());
     }
 
-    const clients = doctorEventClients.get(doctorId);
+    const clients = doctorEventClients.get(userId);
 
     clients.add(res);
 
     res.write(
-        `data: ${JSON.stringify({ type: "connected", doctorId: doctorId })}\n\n`,
+        `data: ${JSON.stringify({ type: "connected", doctorId: userId })}\n\n`,
     );
 
     // Show the current waiting list right away.
-    inboundModule.broadcastQueue(doctorId);
+    inboundModule.broadcastQueue(userId);
 
     // Keep idle connections from being dropped.
     const heartbeat = setInterval(function () {
@@ -1008,10 +1127,10 @@ app.get("/api/doctor/events", (req, res) => {
 
         clients.delete(res);
 
-        console.log("Doctor SSE disconnected:", doctorId);
+        console.log("SSE disconnected:", userId);
 
         if (!clients.size) {
-            doctorEventClients.delete(doctorId);
+            doctorEventClients.delete(userId);
         }
     });
 });
@@ -1021,8 +1140,18 @@ app.get("/api/doctor/events", (req, res) => {
  * ---------------------------------------- */
 
 app.listen(PORT, () => {
-    console.log("=================================");
-    console.log("Bandwidth Voice POC backend started");
-    console.log("Port:", PORT);
-    console.log("=================================");
+    console.log("==================================================");
+    console.log("PATIENT VOICE BACKEND (no verification)");
+    console.log("==================================================");
+    console.log("Port:        ", PORT);
+    console.log("Public URL:  ", NGROK_URL);
+    console.log("Caller ID:   ", VOICE_CALLER_NUMBER);
+    console.log(
+        "Doctors:     ",
+        doctors.map((d) => `${d.name} ${d.phoneNumber}`).join(", ") || "(none — set BANDWIDTH_DOC_1_PHONE)",
+    );
+    console.log("");
+    console.log("Dashboard → Call initiated:", `${NGROK_URL}/api/callbacks/voice/answer`);
+    console.log("Dashboard → Call status:   ", `${NGROK_URL}/api/callbacks/voice/disconnect`);
+    console.log("==================================================");
 });

@@ -65,7 +65,7 @@ module.exports = function registerOutbound(app, ctx) {
     const verificationFailedCalls = new Set(); // callIds that failed verification
 
     /* ----------------------------------------
-     * CREATE VOICE CALL (unchanged)
+     * CREATE VOICE CALL 
      * ---------------------------------------- */
 
     async function createVoiceCall(endpointRequest) {
