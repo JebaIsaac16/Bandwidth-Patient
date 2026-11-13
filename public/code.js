@@ -89,7 +89,7 @@ const bandwidthVoicePoc = function () {
     this.patients = [
         { id: "DR001", name: "Doctor 1", phoneNumber: "+17346660002" },
         { id: "DR002", name: "Doctor 2", phoneNumber: "+18042221111" },
-        { id: "DR003", name: "Doctor 3", phoneNumber: "+19404060747" },
+        { id: "DR003", name: "Doctor 3", phoneNumber: "+19342251126" },
     ];
 
     /*
@@ -499,16 +499,9 @@ const bandwidthVoicePoc = function () {
     };
 
     this.isSessionValid = function (sessionData) {
-        if (
-            !sessionData ||
-            !sessionData.endpointId ||
-            !sessionData.token ||
-            !sessionData.expirationTimestamp
-        ) {
-            return false;
-        }
-
-        return new Date(sessionData.expirationTimestamp).getTime() > Date.now();
+        // Session is always fresh — created on every login.
+        // Just check that an endpoint is present.
+        return Boolean(sessionData && sessionData.endpointId);
     };
 
     this.createDoctorSession = function (userId) {

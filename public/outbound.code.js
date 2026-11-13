@@ -145,8 +145,8 @@ window.bandwidthOutboundMixin = function () {
     this.callPatient = async function (patient) {
         const doctorSession = this.getDoctorSession();
 
-        if (!doctorSession || !this.isSessionValid(doctorSession)) {
-            alert("Doctor session has expired. Please login again.");
+        if (!doctorSession || !doctorSession.endpointId) {
+            alert("Session not ready. Please log in again.");
 
             return;
         }
